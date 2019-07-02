@@ -218,7 +218,7 @@ with open(args.save, 'rb') as f:
     model = torch.load(f)
     # after load the rnn params are not a continuous chunk of memory
     # this makes them a continuous chunk, and will speed up forward pass
-    model.rnn.flatten_parameters()
+# model.rnn.flatten_parameters()
 
 # Run on test data.
 test_loss = evaluate(test_data)
