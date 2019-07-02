@@ -11,6 +11,8 @@ import torch
 
 import data
 
+torch.backends.cudnn.enabled = False
+
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 Language Model')
 
 # Model parameters.
@@ -60,8 +62,13 @@ with open(args.outf, 'w') as outf:
             word_idx = torch.multinomial(word_weights, 1)[0]
             input.fill_(word_idx)
             word = corpus.dictionary.idx2word[word_idx]
+            if type(word).__name__ == "unicode":
+                print(type(word))
+                word = word.encode('utf-8')
 
-            outf.write(word + ('\n' if i % 20 == 19 else ' '))
-
+            try:
+                outf.write(word + ('\n' if i % 20 == 19 else ' '))
+            except:
+                print("error")
             if i % args.log_interval == 0:
                 print('| Generated {}/{} words'.format(i, args.words))
