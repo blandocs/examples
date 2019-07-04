@@ -197,6 +197,7 @@ try:
         train()
         val_loss = evaluate(val_data)
         print('-' * 89)
+        print(val_loss)
         print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss, math.exp(val_loss)))

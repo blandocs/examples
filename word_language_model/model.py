@@ -21,6 +21,9 @@ class RNNModel(nn.Module):
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
         elif rnn_type in ['python_LSTM']:
             self.rnn = NaiveLSTM(ninp, nhid)
+        elif rnn_type in ['new_LSTM']:
+            self.rnn = NewLSTM(ninp, nhid)
+
         else:
             try:
                 nonlinearity = {'RNN_TANH': 'tanh', 'RNN_RELU': 'relu'}[rnn_type]
@@ -28,7 +31,11 @@ class RNNModel(nn.Module):
                 raise ValueError( """An invalid option for `--model` was supplied,
                                  options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']""")
             self.rnn = nn.RNN(ninp, nhid, nlayers, nonlinearity=nonlinearity, dropout=dropout)
-        self.decoder = nn.Linear(nhid, ntoken)
+
+        if rnn_type in ['new_LSTM']:
+            self.decoder = nn.Linear(nhid + nhid, ntoken)
+        else:
+            self.decoder = nn.Linear(nhid, ntoken)
 
         # Optionally tie weights as in:
         # "Using the Output Embedding to Improve Language Models" (Press & Wolf 2016)
@@ -40,6 +47,7 @@ class RNNModel(nn.Module):
             if nhid != ninp:
                 raise ValueError('When using the tied flag, nhid must be equal to emsize')
             self.decoder.weight = self.encoder.weight
+            # ??? 
 
         self.init_weights()
 
@@ -52,6 +60,7 @@ class RNNModel(nn.Module):
         self.encoder.weight.data.uniform_(-initrange, initrange)
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange, initrange)
+
 
     def forward(self, input, hidden):
 #        print(input.size())
@@ -69,7 +78,7 @@ class RNNModel(nn.Module):
         if self.rnn_type == 'LSTM':
             return (weight.new_zeros(self.nlayers, bsz, self.nhid),
                     weight.new_zeros(self.nlayers, bsz, self.nhid))
-        elif self.rnn_type == 'python_LSTM':
+        elif self.rnn_type == 'python_LSTM' or 'new_LSTM':
             return (weight.new_zeros(bsz, self.nhid),
                     weight.new_zeros(bsz, self.nhid))
         else:
@@ -129,6 +138,67 @@ class NaiveLSTM(nn.Module):
             c_t = f_t * c_t + i_t * g_t
             h_t = o_t * torch.tanh(c_t)
             hidden_seq.append(h_t.unsqueeze(Dim.batch))
+        hidden_seq = torch.cat(hidden_seq, dim=Dim.batch)
+        # reshape from shape (sequence, batch, feature) to (batch, sequence, feature)
+        hidden_seq = hidden_seq.transpose(Dim.batch, Dim.seq).contiguous()
+        return hidden_seq, (h_t, c_t)
+
+class NewLSTM(nn.Module):
+    def __init__(self, input_sz: int, hidden_sz: int):
+        super().__init__()
+        self.input_size = input_sz
+        self.hidden_size = hidden_sz
+        # input gate
+        self.W_ii = Parameter(torch.Tensor(input_sz, hidden_sz))
+        self.W_hi = Parameter(torch.Tensor(hidden_sz, hidden_sz))
+        self.b_i = Parameter(torch.Tensor(hidden_sz))
+        # # forget gate for C
+        # self.W_if = Parameter(torch.Tensor(input_sz, hidden_sz))
+        # self.W_hf = Parameter(torch.Tensor(hidden_sz, hidden_sz))
+        # self.b_f = Parameter(torch.Tensor(hidden_sz))
+        # ???
+        self.W_ig = Parameter(torch.Tensor(input_sz, hidden_sz))
+        self.W_hg = Parameter(torch.Tensor(hidden_sz, hidden_sz))
+        self.b_g = Parameter(torch.Tensor(hidden_sz))
+        # # output gate
+        # self.W_io = Parameter(torch.Tensor(input_sz, hidden_sz))
+        # self.W_ho = Parameter(torch.Tensor(hidden_sz, hidden_sz))
+        # self.b_o = Parameter(torch.Tensor(hidden_sz))
+         
+        self.init_weights()
+     
+    def init_weights(self):
+        for p in self.parameters():
+            if p.data.ndimension() >= 2:
+                nn.init.xavier_uniform_(p.data)
+            else:
+                nn.init.zeros_(p.data)
+         
+    def forward(self, x, init_states=None):
+        """Assumes x is of shape (batch, sequence, feature)"""
+        seq_sz, bs, _ = x.size()
+        hidden_seq = []
+        if init_states is None:
+            h_t, c_t = torch.zeros(self.hidden_size).to(x.device), torch.zeros(self.hidden_size).to(x.device)
+        else:
+            h_t, c_t = init_states
+        for t in range(seq_sz): # iterate over the time steps
+            x_t = x[t, :, :]
+            i_t = torch.sigmoid(x_t @ self.W_ii + h_t @ self.W_hi + self.b_i)
+            # f_t = torch.sigmoid(x_t @ self.W_if + h_t @ self.W_hf + self.b_f)
+            g_t = torch.tanh(x_t @ self.W_ig + h_t @ self.W_hg + self.b_g)
+            # o_t = torch.sigmoid(x_t @ self.W_io + h_t @ self.W_ho + self.b_o)
+            # c_t = f_t * c_t + i_t * g_t
+            
+            h_t = i_t * g_t 
+            c_t += h_t # maybe dropout will be added or regularize
+
+
+            # h_t = o_t * torch.tanh(c_t)
+            # 여기서 outputsize 2 가 400이; 되야함. channel concat해서
+
+            c_h = torch.cat([h_t, c_t], dim=1)
+            hidden_seq.append(c_h.unsqueeze(Dim.batch))
         hidden_seq = torch.cat(hidden_seq, dim=Dim.batch)
         # reshape from shape (sequence, batch, feature) to (batch, sequence, feature)
         hidden_seq = hidden_seq.transpose(Dim.batch, Dim.seq).contiguous()
